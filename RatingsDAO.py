@@ -65,3 +65,33 @@ def insertwithselect(lowerbound, upperbound, desttable, conn, ratingstable=TABLE
           WHERE rating > {2} AND rating <= {3}
         );""".format(desttable, ratingstable, lowerbound, upperbound))
         if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)
+
+
+def numberofratings(conn, table=TABLENAME):
+    """
+    Computes the number of records in the Ratings table
+    :param conn: open connection to DB
+    :param table: name of the Ratings table if other than default
+    :return:An integer, number of records in the table
+    """
+    with conn.cursor() as cur:
+        cur.execute('SELECT COUNT(id) FROM {0};'.format(table))
+        return cur.fetchone()[0]
+
+
+def insertids(conn, ids, desttable, ratingstable=TABLENAME):
+    """
+    Insert the given IDs from ratings table into a partition (desttable) table
+    :param conn: open connection to DB
+    :param ids: Rating IDs to be inserted into desttable
+    :param desttable: destination table into which these ratings have to be inserted
+    :param ratingstable: source table from which ratings are to be picked
+    :return:None
+    """
+    with conn.cursor() as cur:
+        cur.execute("""INSERT INTO {0} (id, userid, movieid, rating) (
+          SELECT id, userid, movieid, rating
+          FROM {1}
+          WHERE id IN ({2})
+        );""".format(desttable, ratingstable, ','.join(str(id) for id in ids)))
+        if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)

@@ -109,7 +109,7 @@ def loadratings(filepath, conn):
         RatingsDAO.insert(ratings, conn)
 
 
-def createtableandinsert(conn, lower_bound, sno, upper_bound, dropifexists=True):
+def createrangepartitionandinsert(conn, lower_bound, sno, upper_bound, dropifexists=True):
     """
     Creates a new partition table and calls INSERT method of DAO to insert the data
     :param conn: open connection to DB
@@ -134,17 +134,46 @@ def rangepartition(n, conn):
 
     sno = 1
     while upper_bound <= MAX_RATING:
-        createtableandinsert(conn, lower_bound, sno, upper_bound)
+        createrangepartitionandinsert(conn, lower_bound, sno, upper_bound)
         lower_bound += inc
         upper_bound += inc
         sno += 1
 
     # If number of partitions is not divisible by MAX_RATING, the last partition will be missed due to rounding
     if lower_bound != MAX_RATING:
-        createtableandinsert(conn, lower_bound, sno, MAX_RATING)
+        createrangepartitionandinsert(conn, lower_bound, sno, MAX_RATING)
 
     # save the movies with zero rating in the first partition
-    createtableandinsert(conn, -1, 1, 0, False)
+    createrangepartitionandinsert(conn, -1, 1, 0, False)
+
+
+def createrobinpartitionandinsert(conn, sno, ids, dropifexists=True):
+    """
+    Creates a new partition table and calls INSERT method of DAO to insert the data
+    :param conn: open connection to DB
+    :param sno: table number. As single single table is split into parts
+    :param ids: IDs of the ratings to insert
+    :param dropifexists: drops the table if exists
+    :return:None
+    """
+    partition_tablename = 'rrobin_part{0}'.format(sno)
+    RatingsDAO.create(conn, partition_tablename, dropifexists)
+    RatingsDAO.insertids(conn, ids, partition_tablename)
+    if DEBUG: Globals.printinfo('Partition {0}: saved {1} ratings => {2}...'.format(sno, len(ids), ids[0:6]))
+
+
+def roundrobinpartition(n, conn):
+    """
+    Partition the ratings table into 'n' pieces in a round robin manner
+    :param n: Number of partitions
+    :param conn: open connection to DB
+    :return:None
+    """
+    numberofratings = RatingsDAO.numberofratings(conn)
+    allids = range(1, numberofratings + 1)
+    for i in range(1, n + 1):
+        ratingids = filter(lambda x: x % n == i % n, allids)
+        createrobinpartitionandinsert(conn, i, ratingids)
 
 
 if __name__ == '__main__':
@@ -163,6 +192,7 @@ if __name__ == '__main__':
 
         with getconnection(DATABASE_NAME) as conn:
             loadratings('test_data.dat', conn)
-            rangepartition(1, conn)
+            # rangepartition(5, conn)
+            roundrobinpartition(3, conn)
     except Exception as detail:
         Globals.printerror(detail)
