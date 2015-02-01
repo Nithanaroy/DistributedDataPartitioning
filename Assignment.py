@@ -4,10 +4,14 @@ import psycopg2
 from itertools import islice
 
 import RatingsDAO
+import Globals
 
 CHUNK_SIZE = 140  # bytes
 MAX_LINES_COUNT_READ = 4  # Maximum number of lines to read into memory
 DATABASE_NAME = 'dds_assgn1'
+MAX_RATING = 5.0
+
+DEBUG = True
 
 
 def readfilebyline(filepath):
@@ -82,7 +86,7 @@ def createdb(dbname):
     if count == 0:
         cur.execute('CREATE DATABASE %s' % (dbname,))  # Create the database
     else:
-        print 'A database named {0} already exists'.format(dbname)
+        Globals.printinfo('A database named "{0}" already exists'.format(dbname))
 
     # Clean up
     cur.close()
@@ -105,6 +109,43 @@ def loadratings(filepath, conn):
         RatingsDAO.insert(ratings, conn)
 
 
+def createtableandinsert(conn, lower_bound, sno, upper_bound, dropifexists=True):
+    """
+    Creates a new partition table and calls INSERT method of DAO to insert the data
+    :param conn: open connection to DB
+    :param lower_bound: lower bound on the rating
+    :param sno: table number. As single single table is split into parts
+    :param upper_bound: inclusive upper bound on the rating to insert in the new table
+    :param dropifexists: drops the table if exists
+    :return:None
+    """
+    partition_tablename = 'range_part{0}'.format(sno)
+    RatingsDAO.create(conn, partition_tablename, dropifexists)
+    RatingsDAO.insertwithselect(lower_bound, upper_bound, partition_tablename, conn)
+    if DEBUG: Globals.printinfo('Partition {2}: saved ratings => ({0}, {1}]'.format(lower_bound, upper_bound, sno))
+
+
+def rangepartition(n, conn):
+    if n <= 0 or not isinstance(n, int): raise AttributeError("Number of partitions should be a positive integer")
+
+    inc = round(float(MAX_RATING) / n, 1)  # precision restricted to 1 decimal as Ratings have 0.5 increments
+    lower_bound = 0.0
+    upper_bound = lower_bound + inc
+
+    sno = 1
+    while upper_bound <= MAX_RATING:
+        createtableandinsert(conn, lower_bound, sno, upper_bound)
+        lower_bound += inc
+        upper_bound += inc
+        sno += 1
+
+    # If number of partitions is not divisible by MAX_RATING, the last partition will be missed due to rounding
+    if lower_bound != MAX_RATING:
+        createtableandinsert(conn, lower_bound, sno, MAX_RATING)
+
+    # save the movies with zero rating in the first partition
+    createtableandinsert(conn, -1, 1, 0, False)
+
 
 if __name__ == '__main__':
     try:
@@ -122,6 +163,6 @@ if __name__ == '__main__':
 
         with getconnection(DATABASE_NAME) as conn:
             loadratings('test_data.dat', conn)
-
+            rangepartition(1, conn)
     except Exception as detail:
-        print "Error: ", detail
+        Globals.printerror(detail)
