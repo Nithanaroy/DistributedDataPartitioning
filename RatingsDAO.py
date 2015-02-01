@@ -76,6 +76,7 @@ def numberofratings(conn, table=TABLENAME):
     """
     with conn.cursor() as cur:
         cur.execute('SELECT COUNT(id) FROM {0};'.format(table))
+        if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)
         return cur.fetchone()[0]
 
 
