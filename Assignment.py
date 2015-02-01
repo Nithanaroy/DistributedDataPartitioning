@@ -5,11 +5,14 @@ from itertools import islice
 
 import RatingsDAO
 import Globals
+import math
 
 CHUNK_SIZE = 140  # bytes
 MAX_LINES_COUNT_READ = 4  # Maximum number of lines to read into memory
 DATABASE_NAME = 'dds_assgn1'
 MAX_RATING = 5.0
+RANGE_PARTITION_TABLE_PREFIX = 'range_part'
+RROBIN_PARTITION_TABLE_PREFIX = 'rrobin_part'
 
 DEBUG = True
 
@@ -119,13 +122,19 @@ def createrangepartitionandinsert(conn, lower_bound, sno, upper_bound, dropifexi
     :param dropifexists: drops the table if exists
     :return:None
     """
-    partition_tablename = 'range_part{0}'.format(sno)
+    partition_tablename = '{0}{1}'.format(RANGE_PARTITION_TABLE_PREFIX, sno)
     RatingsDAO.create(conn, partition_tablename, dropifexists)
     RatingsDAO.insertwithselect(lower_bound, upper_bound, partition_tablename, conn)
     if DEBUG: Globals.printinfo('Partition {2}: saved ratings => ({0}, {1}]'.format(lower_bound, upper_bound, sno))
 
 
 def rangepartition(n, conn):
+    """
+    Partitions the ratings table in to the given number of partition using Range based partitioning scheme
+    :param n: Number of partitions
+    :param conn: open connection to DB
+    :return:None
+    """
     if n <= 0 or not isinstance(n, int): raise AttributeError("Number of partitions should be a positive integer")
 
     inc = round(float(MAX_RATING) / n, 1)  # precision restricted to 1 decimal as Ratings have 0.5 increments
@@ -156,7 +165,7 @@ def createrobinpartitionandinsert(conn, sno, ids, dropifexists=True):
     :param dropifexists: drops the table if exists
     :return:None
     """
-    partition_tablename = 'rrobin_part{0}'.format(sno)
+    partition_tablename = '{0}{1}'.format(RROBIN_PARTITION_TABLE_PREFIX, sno)
     RatingsDAO.create(conn, partition_tablename, dropifexists)
     RatingsDAO.insertids(conn, ids, partition_tablename)
     if DEBUG: Globals.printinfo('Partition {0}: saved {1} ratings => {2}...'.format(sno, len(ids), ids[0:6]))
@@ -176,6 +185,15 @@ def roundrobinpartition(n, conn):
         createrobinpartitionandinsert(conn, i, ratingids)
 
 
+def rangeinsert(conn, userid, movieid, rating):
+    n = 5
+    partitionwidth = float(MAX_RATING) / n
+    # to handle cases when rating is 0, max function is used. Will be inserted in first patition
+    partitionindex = max(int(math.ceil(rating / partitionwidth)), 1)
+    destinationtable = RANGE_PARTITION_TABLE_PREFIX + str(partitionindex)
+    RatingsDAO.insert([(userid, movieid, rating)], conn, destinationtable)
+
+
 if __name__ == '__main__':
     try:
         # conn = psycopg2.connect("dbname='mydb' user='postgres' host='localhost' password='1234'")
@@ -192,7 +210,8 @@ if __name__ == '__main__':
 
         with getconnection(DATABASE_NAME) as conn:
             loadratings('test_data.dat', conn)
-            # rangepartition(5, conn)
-            roundrobinpartition(3, conn)
+            rangepartition(5, conn)
+            rangeinsert(conn, 10, 292, 0)
+            # roundrobinpartition(3, conn)
     except Exception as detail:
         Globals.printerror(detail)
