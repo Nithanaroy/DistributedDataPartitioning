@@ -23,6 +23,7 @@ def create(conn, table=TABLENAME, dropifexists=True):
         if dropifexists: cur.execute('DROP TABLE IF EXISTS {0}'.format(table))
         cur.execute("""
         CREATE TABLE IF NOT EXISTS {0}(
+          id BIGSERIAL PRIMARY KEY,
           userid INTEGER,
           movieid INTEGER,
           rating NUMERIC
@@ -43,17 +44,18 @@ def insert(ratings, conn, table=TABLENAME):
     with conn.cursor() as cur:
         for rating in ratings:
             values.append(cur.mogrify("(%s,%s,%s)", rating))
-        cur.execute('INSERT INTO {0} VALUES '.format(table) + ','.join(values))
+        cur.execute('INSERT INTO {0} (userid, movieid, rating) VALUES '.format(table) + ','.join(values))
         if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)
 
 
-def insertwithselect(lowerbound, upperbound, desttable, conn):
+def insertwithselect(lowerbound, upperbound, desttable, conn, ratingstable=TABLENAME):
     """
     Inserts data from Master Ratings table to a given table after filtering based on lower and upper bounds
     :param lowerbound: exclusive lower bound for the SELECT statement
     :param upperbound: inclusive upper bound for the SELECT statement
     :param desttable: destination table name to copy data into
     :param conn: open database connection
+    :param ratingstable: name of ratings table
     :return:None
     """
     with conn.cursor() as cur:
@@ -61,5 +63,5 @@ def insertwithselect(lowerbound, upperbound, desttable, conn):
           SELECT userid, movieid, rating
           FROM {1}
           WHERE rating > {2} AND rating <= {3}
-        );""".format(desttable, TABLENAME, lowerbound, upperbound))
+        );""".format(desttable, ratingstable, lowerbound, upperbound))
         if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)
