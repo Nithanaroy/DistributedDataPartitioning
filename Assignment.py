@@ -131,6 +131,15 @@ def createrangepartitionandinsert(conn, lower_bound, sno, upper_bound, dropifexi
 def rangepartition(n, conn):
     """
     Partitions the ratings table in to the given number of partition using Range based partitioning scheme
+    Partitioned table names will be starting from 1. If the number of partitions are N, the range of Rating values,
+    0 to MAX_RATING, will be split uniformly into N pieces.
+    Eg: N = 5
+    Partition 1: all movies with a rating => [0, 1]
+    Partition 2: all movies with a rating => (1, 2]
+    Partition 3: all movies with a rating => (2, 3]
+    Partition 4: all movies with a rating => (3, 4]
+    Partition 5: all movies with a rating => (4, 5]
+    As shown, movies with zero rating will be placed in the first partition
     :param n: Number of partitions
     :param conn: open connection to DB
     :return:None
@@ -174,24 +183,59 @@ def createrobinpartitionandinsert(conn, sno, ids, dropifexists=True):
 def roundrobinpartition(n, conn):
     """
     Partition the ratings table into 'n' pieces in a round robin manner
+    Partitions will be zero indexed.
+    Eg: N = 3 partitions
+    Partition 0: IDs = [0,3,6..]
+    Partition 1: IDs = [1,3,7...]
+    Partition 2: IDs = [2,4,8...]
     :param n: Number of partitions
     :param conn: open connection to DB
     :return:None
     """
+    if n <= 0 or not isinstance(n, int): raise AttributeError("Number of partitions should be a positive integer")
+
     numberofratings = RatingsDAO.numberofratings(conn)
+    # Assumption: IDs are in order from 1 to total number of ratings in Ratings table
     allids = range(1, numberofratings + 1)
-    for i in range(1, n + 1):
-        ratingids = filter(lambda x: x % n == i % n, allids)
+    for i in range(0, n):
+        ratingids = filter(lambda x: x % n == i, allids)
         createrobinpartitionandinsert(conn, i, ratingids)
 
 
 def rangeinsert(conn, userid, movieid, rating):
+    """
+    Insert a new rating into range based partitioned tables
+    :param conn: open connection to DB
+    :param userid: 1st column of ratings table, User ID
+    :param movieid: 2nd column of ratings table, Movie ID
+    :param rating: 3rd column of ratings table, Rating
+    :return:None
+    """
     n = 5
     partitionwidth = float(MAX_RATING) / n
     # to handle cases when rating is 0, max function is used. Will be inserted in first patition
     partitionindex = max(int(math.ceil(rating / partitionwidth)), 1)
     destinationtable = RANGE_PARTITION_TABLE_PREFIX + str(partitionindex)
     RatingsDAO.insert([(userid, movieid, rating)], conn, destinationtable)
+
+
+def rrobininsert(conn, userid, movieid, rating):
+    """
+    Insert a new rating into round robin based partitioned tables
+    :param conn: open connection to DB
+    :param userid: 1st column of ratings table, User ID
+    :param movieid: 2nd column of ratings table, Movie ID
+    :param rating: 3rd column of ratings table, Rating
+    :return:None
+    """
+    n = 3
+    numberofratings = RatingsDAO.numberofratings(conn)
+    partitionindex = (numberofratings + 1) % n
+    destinationtable = RROBIN_PARTITION_TABLE_PREFIX + str(partitionindex)
+    RatingsDAO.insert([(userid, movieid, rating)], conn, destinationtable)
+    # also insert into the ratings table as we are using computing partition index based on number of
+    # rows in ratings table above
+    RatingsDAO.insert([(userid, movieid, rating)], conn)
 
 
 if __name__ == '__main__':
@@ -210,8 +254,11 @@ if __name__ == '__main__':
 
         with getconnection(DATABASE_NAME) as conn:
             loadratings('test_data.dat', conn)
-            rangepartition(5, conn)
-            rangeinsert(conn, 10, 292, 0)
-            # roundrobinpartition(3, conn)
+            # rangepartition(5, conn)
+            # rangeinsert(conn, 10, 292, 0)
+            roundrobinpartition(3, conn)
+            rrobininsert(conn, 10, 292, 0)
+            rrobininsert(conn, 100, 292, 0)
+            rrobininsert(conn, 1000, 292, 0)
     except Exception as detail:
         Globals.printerror(detail)

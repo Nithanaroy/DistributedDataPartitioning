@@ -89,8 +89,8 @@ def insertids(conn, ids, desttable, ratingstable=TABLENAME):
     :return:None
     """
     with conn.cursor() as cur:
-        cur.execute("""INSERT INTO {0} (id, userid, movieid, rating) (
-          SELECT id, userid, movieid, rating
+        cur.execute("""INSERT INTO {0} (userid, movieid, rating) (
+          SELECT userid, movieid, rating
           FROM {1}
           WHERE id IN ({2})
         );""".format(desttable, ratingstable, ','.join(str(id) for id in ids)))
