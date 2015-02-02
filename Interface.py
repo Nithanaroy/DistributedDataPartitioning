@@ -8,27 +8,27 @@ import psycopg2
 RATINGS_TABLE_NAME = 'Ratings'
 
 
-def getopenconnection(user='postgres', password='__PASSWORD_FOR_USER_POSTGRES__', dbname='dds_assgn1'):
-    return psycopg2.connect("dbname='" + dbname + "' user='" + +user + "' host='localhost' password='" + password + "'")
+def getopenconnection(user='postgres', password='1234', dbname='dds_assgn1'):
+    return psycopg2.connect("dbname='" + dbname + "' user='" + user + "' host='localhost' password='" + password + "'")
 
 
-def loadratings(ratingsfilepath):
+def loadratings(ratingsfilepath, openconnection):
     pass
 
 
-def rangepartition(ratingstablename, numberofpartitions):
+def rangepartition(ratingstablename, numberofpartitions, openconnection):
     pass
 
 
-def roundrobinpartition(ratingstablename, numberofpartitions):
+def roundrobinpartition(ratingstablename, numberofpartitions, openconnection):
     pass
 
 
-def roundrobininsert(ratingstablename, userid, itemid, rating):
+def roundrobininsert(ratingstablename, userid, itemid, rating, openconnection):
     pass
 
 
-def rangeinsert(ratingstablename, userid, itemid, rating):
+def rangeinsert(ratingstablename, userid, itemid, rating, openconnection):
     pass
 
 
@@ -39,7 +39,7 @@ def create_db(dbname):
     :return:None
     """
     # Connect to the default database
-    con = getopenconnection()
+    con = getopenconnection(dbname='postgres')
     con.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
     cur = con.cursor()
 
@@ -59,5 +59,9 @@ def create_db(dbname):
 if __name__ == '__main__':
     try:
         create_db('dds_assgn1')
+
+        with getopenconnection() as con:
+            loadratings('ratings.dat', con)
+
     except Exception as detail:
         print "OOPS! This is the error ==> ", detail
