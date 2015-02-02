@@ -15,16 +15,35 @@ import time
 
 
 def printerror(message):
-    print('E: {0} {1}'.format(getformattedtime(time.time()), message))
+    print('\nE: {0} {1}'.format(getformattedtime(time.time()), message))
 
 
 def printinfo(message):
-    print('I: {0} {1}'.format(getformattedtime(time.time()), message))
+    print('\nI: {0} {1}'.format(getformattedtime(time.time()), message))
+
+
+def printwarning(message):
+    print('\nW: {0} {1}'.format(getformattedtime(time.time()), message))
 
 
 def printquery(querystring):
-    print('Q: {0} {1}'.format(getformattedtime(time.time()), querystring))
+    print('\nQ: {0} {1}'.format(getformattedtime(time.time()), querystring))
 
 
 def getformattedtime(srctime):
     return datetime.datetime.fromtimestamp(srctime).strftime('%Y-%m-%d %H:%M:%S')
+
+
+# Utility functions
+def drange(start, stop, step):
+    """
+    A range function which allows floating step values
+    :param start: starting point, inclusive
+    :param stop: ending point, exclusive
+    :param step: increment
+    :return:Iterator
+    """
+    r = start
+    while r < stop:
+        yield r
+        r += step

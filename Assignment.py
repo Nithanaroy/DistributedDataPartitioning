@@ -104,12 +104,15 @@ def loadratings(filepath, conn):
     :return: None
     """
     RatingsDAO.create(conn)
+    count = 0
     for lines in getnextchunk(filepath):
         ratings = []
         for line in lines:
             rating = line.split('::')[0:3]
             ratings.append(rating)
+            count += 1
         RatingsDAO.insert(ratings, conn)
+    Globals.printinfo("Loaded {0} ratings into DB".format(count))
 
 
 def createrangepartitionandinsert(conn, lower_bound, sno, upper_bound, dropifexists=True):
@@ -147,7 +150,7 @@ def rangepartition(n, conn):
     """
     if n <= 0 or not isinstance(n, int): raise AttributeError("Number of partitions should be a positive integer")
 
-    inc = round(float(MAX_RATING) / n, 1)  # precision restricted to 1 decimal as Ratings have 0.5 increments
+    inc = round(float(MAX_RATING) / n, 10)  # precision restricted to 10 decimal places
     lower_bound = 0.0
     upper_bound = lower_bound + inc
 
@@ -165,7 +168,7 @@ def rangepartition(n, conn):
     # save the movies with zero rating in the first partition
     createrangepartitionandinsert(conn, -1, 1, 0, False)
 
-    #save the number of partitions in the meta data table
+    # save the number of partitions in the meta data table
     MetaDataDAO.upsert(conn, Globals.RANGE_PARTITIONS_KEY, n)
 
 
@@ -205,7 +208,7 @@ def roundrobinpartition(n, conn):
         ratingids = filter(lambda x: x % n == i, allids)
         createrobinpartitionandinsert(conn, i, ratingids)
 
-    #save the number of partitions in the meta data table
+    # save the number of partitions in the meta data table
     MetaDataDAO.upsert(conn, Globals.RROBIN_PARTITIONS_KEY, n)
 
 
@@ -220,7 +223,9 @@ def rangeinsert(conn, userid, movieid, rating):
     :return:None
     """
     n = MetaDataDAO.select(conn, Globals.RANGE_PARTITIONS_KEY)
-    if n is None: raise Exception("First create the partitions and then try to insert")
+    if n is None:
+        Globals.printwarning("First create the partitions and then try to insert")
+        return
     n = int(n)
 
     partitionwidth = float(MAX_RATING) / n
@@ -244,7 +249,9 @@ def rrobininsert(conn, userid, movieid, rating):
     :return:None
     """
     n = MetaDataDAO.select(conn, Globals.RROBIN_PARTITIONS_KEY)
-    if n is None: raise Exception("First create the partitions and then try to insert")
+    if n is None:
+        Globals.printwarning("First create the partitions and then try to insert")
+        return
     n = int(n)
 
     numberofratings = RatingsDAO.numberofratings(conn)
@@ -259,31 +266,85 @@ def rrobininsert(conn, userid, movieid, rating):
                                                                                           destinationtable))
 
 
+def loadratingshelper(conn):
+    loadratings('test_data.dat', conn)
+
+
+def rangepartitionhelper(conn):
+    cpartitions = int(raw_input('How many partitions? '))
+    rangepartition(cpartitions, conn)
+
+
+def roundrobinpartitionhelper(conn):
+    cpartitions = int(raw_input('How many partitions? '))
+    roundrobinpartition(cpartitions, conn)
+
+
+def fetchrating():
+    userid = int(raw_input('Enter rating, user id: '))
+    movieid = int(raw_input('movie id: '))
+    while True:
+        rating = float(raw_input('rating: '))
+
+        # validate rating
+        # 1) Should be a positive value and less than or equal to 5.
+        # 2) Should have increments of 0.5
+        validratings = list(Globals.drange(0, 5.1, 0.5))
+        if rating not in validratings:
+            print(
+                'Rating should be a positive value, less than or equal to 5. It should be one of {0}. Try again\n'.format(
+                    validratings))
+        else:
+            break
+    return {'userid': userid, 'movieid': movieid, 'rating': rating}
+
+
+def rangeinserthelper(conn):
+    newrating = fetchrating()
+    rangeinsert(conn, newrating['userid'], newrating['movieid'], newrating['rating'])
+
+
+def rrobininserthelper(conn):
+    newrating = fetchrating()
+    rrobininsert(conn, newrating['userid'], newrating['movieid'], newrating['rating'])
+
+
+def handleexit(*_):
+    import sys
+
+    sys.exit(0)
+
+
+def deletepartitionsandexit(conn):
+    with conn.cursor() as cur:
+        cur.execute('drop schema public cascade; create schema public;')
+    Globals.printinfo('Dropped all tables')
+    handleexit()
+
+
 if __name__ == '__main__':
     try:
-        # conn = psycopg2.connect("dbname='mydb' user='postgres' host='localhost' password='1234'")
-        # cur = conn.cursor()
-        # cur.execute("""SELECT * from weather""")
-        # rows = cur.fetchall()
-        # print "\nShow me the databases:\n"
-        # for row in rows:
-        # print "   ", row
-        # cur.close()
-        # conn.close()
-
         createdb(DATABASE_NAME)
 
+        options = {
+            1: loadratingshelper,
+            2: rangepartitionhelper,
+            3: roundrobinpartitionhelper,
+            4: rangeinserthelper,
+            5: rrobininserthelper,
+            6: handleexit,
+            7: deletepartitionsandexit
+        }
+
         with getconnection(DATABASE_NAME) as conn:
+            conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
             MetaDataDAO.create(conn)
-            loadratings('test_data.dat', conn)
 
-            # rangepartition(5, conn)
-            # rangeinsert(conn, 10, 292, 0)
+            while True:
+                choice = raw_input(
+                    "\nEnter your choice (number):\n  1) Load Ratings\n  2) Range Partition\n  3) Round Robin Partition\n  4) Range Insert\n  5) Round Robin Insert\n  6) Exit\n  7) Delete Partitions and Exit\t: ")
 
-            roundrobinpartition(3, conn)
-            rrobininsert(conn, 10, 292, 0)
-            rrobininsert(conn, 100, 292, 0)
-            rrobininsert(conn, 1000, 292, 0)
+                options[int(choice)](conn)
 
     except Exception as detail:
         Globals.printerror(detail)
