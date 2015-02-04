@@ -72,26 +72,26 @@ def createdb(dbname):
     con.close()
 
 
-def loadratings(filepath, conn):
+def loadratings(ratingstablename, ratingsfilepath, openconnection):
     """
     Loads the file into DB
-    :param filepath: relative or abs path of the file to load
-    :param conn: open connection to DB
+    :param ratingsfilepath: relative or abs path of the file to load
+    :param openconnection: open connection to DB
     :return: None
     """
-    RatingsDAO.create(conn)
+    RatingsDAO.create(openconnection, ratingstablename)
     count = 0
-    for lines in getnextchunk(filepath):
+    for lines in getnextchunk(ratingsfilepath):
         ratings = []
         for line in lines:
             rating = line.split('::')[0:3]
             ratings.append(rating)
             count += 1
-        RatingsDAO.insert(ratings, conn)
+        RatingsDAO.insert(ratings, openconnection, ratingstablename)
     Globals.printinfo("Loaded {0} ratings into DB".format(count))
 
 
-def rangepartition(n, conn):
+def rangepartition(ratingstablename, numberofpartitions, openconnection):
     """
     Partitions the ratings table in to the given number of partition using Range based partitioning scheme
     Partitioned table names will be starting from 1. If the number of partitions are N, the range of Rating values,
@@ -103,98 +103,100 @@ def rangepartition(n, conn):
     Partition 4: all movies with a rating => (3, 4]
     Partition 5: all movies with a rating => (4, 5]
     As shown, movies with zero rating will be placed in the first partition
-    :param n: Number of partitions
-    :param conn: open connection to DB
+    :param numberofpartitions: Number of partitions
+    :param openconnection: open connection to DB
     :return:None
     """
-    if n <= 0 or not isinstance(n, int): raise AttributeError("Number of partitions should be a positive integer")
+    if numberofpartitions <= 0 or not isinstance(numberofpartitions, int): raise AttributeError(
+        "Number of partitions should be a positive integer")
 
-    inc = round(float(MAX_RATING) / n, 10)  # precision restricted to 10 decimal places
+    inc = round(float(MAX_RATING) / numberofpartitions, 10)  # precision restricted to 10 decimal places
     lower_bound = 0.0
     upper_bound = lower_bound + inc
 
     sno = 1
     while upper_bound <= MAX_RATING:
-        createrangepartitionandinsert(conn, lower_bound, sno, upper_bound)
+        createrangepartitionandinsert(openconnection, lower_bound, sno, upper_bound, ratingstablename)
         lower_bound += inc
         upper_bound += inc
         sno += 1
 
     # If number of partitions is not divisible by MAX_RATING, the last partition will be missed due to rounding
     if lower_bound != MAX_RATING:
-        createrangepartitionandinsert(conn, lower_bound, sno, MAX_RATING)
+        createrangepartitionandinsert(openconnection, lower_bound, sno, MAX_RATING, ratingstablename)
 
     # save the movies with zero rating in the first partition
-    createrangepartitionandinsert(conn, -1, 1, 0, False)
+    createrangepartitionandinsert(openconnection, -1, 1, 0, ratingstablename, False)
 
     # save the number of partitions in the meta data table
-    MetaDataDAO.upsert(conn, Globals.RANGE_PARTITIONS_KEY, n)
+    MetaDataDAO.upsert(openconnection, Globals.RANGE_PARTITIONS_KEY, numberofpartitions)
 
 
-def roundrobinpartition(n, conn):
+def roundrobinpartition(ratingstablename, numberofpartitions, openconnection):
     """
-    Partition the ratings table into 'n' pieces in a round robin manner
+    Partition the ratings table into 'numberofpartitions' pieces in a round robin manner
     Partitions will be zero indexed.
     Eg: N = 3 partitions
     Partition 0: IDs = [0,3,6..]
     Partition 1: IDs = [1,3,7...]
     Partition 2: IDs = [2,4,8...]
-    :param n: Number of partitions
-    :param conn: open connection to DB
+    :param numberofpartitions: Number of partitions
+    :param openconnection: open connection to DB
     :return:None
     """
-    if n <= 0 or not isinstance(n, int): raise AttributeError("Number of partitions should be a positive integer")
+    if numberofpartitions <= 0 or not isinstance(numberofpartitions, int): raise AttributeError(
+        "Number of partitions should be a positive integer")
 
-    numberofratings = RatingsDAO.numberofratings(conn)
+    numberofratings = RatingsDAO.numberofratings(openconnection, ratingstablename)
     # Assumption: IDs are in order from 1 to total number of ratings in Ratings table
     allids = range(1, numberofratings + 1)
-    for i in range(0, n):
-        ratingids = filter(lambda x: x % n == i, allids)
-        createrobinpartitionandinsert(conn, i, ratingids)
+    for i in range(0, numberofpartitions):
+        ratingids = filter(lambda x: x % numberofpartitions == i, allids)
+        createrobinpartitionandinsert(openconnection, i, ratingids, ratingstablename)
 
     # save the number of partitions in the meta data table
-    MetaDataDAO.upsert(conn, Globals.RROBIN_PARTITIONS_KEY, n)
+    MetaDataDAO.upsert(openconnection, Globals.RROBIN_PARTITIONS_KEY, numberofpartitions)
 
 
-def rrobininsert(conn, userid, movieid, rating):
+def roundrobininsert(ratingstablename, userid, itemid, rating, openconnection):
     """
     Insert a new rating into round robin based partitioned tables
     An error is thrown if this method is called without creating range based pratition tables
-    :param conn: open connection to DB
+    :param openconnection: open connection to DB
     :param userid: 1st column of ratings table, User ID
-    :param movieid: 2nd column of ratings table, Movie ID
+    :param itemid: 2nd column of ratings table, Movie ID
     :param rating: 3rd column of ratings table, Rating
     :return:None
     """
-    n = MetaDataDAO.select(conn, Globals.RROBIN_PARTITIONS_KEY)
+    n = MetaDataDAO.select(openconnection, Globals.RROBIN_PARTITIONS_KEY)
     if n is None:
         Globals.printwarning("First create the partitions and then try to insert")
         return
     n = int(n)
 
-    numberofratings = RatingsDAO.numberofratings(conn)
+    numberofratings = RatingsDAO.numberofratings(openconnection, ratingstablename)
     partitionindex = (numberofratings + 1) % n
     destinationtable = RROBIN_PARTITION_TABLE_PREFIX + str(partitionindex)
-    RatingsDAO.insert([(userid, movieid, rating)], conn, destinationtable)
+    RatingsDAO.insert([(userid, itemid, rating)], openconnection, destinationtable)
     # also insert into the ratings table as we are using computing partition index based on number of
     # rows in ratings table above
-    RatingsDAO.insert([(userid, movieid, rating)], conn)
+    RatingsDAO.insert([(userid, itemid, rating)], openconnection, ratingstablename)
     if Globals.DEBUG: Globals.printinfo(
-        'Inserted rating (UserID: {0}, MovieID: {1}, Rating: {2}), to "{3}" table'.format(userid, movieid, rating,
+        'Inserted rating (UserID: {0}, MovieID: {1}, Rating: {2}), to "{3}" table'.format(userid, itemid, rating,
                                                                                           destinationtable))
 
 
-def rangeinsert(conn, userid, movieid, rating):
+def rangeinsert(ratingstablename, userid, itemid, rating, openconnection):
     """
     Insert a new rating into range based partitioned tables
     An error is thrown if this method is called without creating range based pratition tables
-    :param conn: open connection to DB
+    :param openconnection: open connection to DB
     :param userid: 1st column of ratings table, User ID
-    :param movieid: 2nd column of ratings table, Movie ID
+    :param itemid: 2nd column of ratings table, Movie ID
     :param rating: 3rd column of ratings table, Rating
     :return:None
     """
-    n = MetaDataDAO.select(conn, Globals.RANGE_PARTITIONS_KEY)
+    n = MetaDataDAO.select(openconnection, Globals.RANGE_PARTITIONS_KEY)
     if n is None:
         Globals.printwarning("First create the partitions and then try to insert")
         return
@@ -204,15 +206,15 @@ def rangeinsert(conn, userid, movieid, rating):
     # to handle cases when rating is 0, max function is used. Will be inserted in first patition
     partitionindex = max(int(math.ceil(rating / partitionwidth)), 1)
     destinationtable = RANGE_PARTITION_TABLE_PREFIX + str(partitionindex)
-    RatingsDAO.insert([(userid, movieid, rating)], conn, destinationtable)
+    RatingsDAO.insert([(userid, itemid, rating)], openconnection, destinationtable)
     if Globals.DEBUG: Globals.printinfo(
-        'Inserted rating (UserID: {0}, MovieID: {1}, Rating: {2}), to "{3}" table'.format(userid, movieid, rating,
+        'Inserted rating (UserID: {0}, MovieID: {1}, Rating: {2}), to "{3}" table'.format(userid, itemid, rating,
                                                                                           destinationtable))
 
 
 # helpers
 
-def createrangepartitionandinsert(conn, lower_bound, sno, upper_bound, dropifexists=True):
+def createrangepartitionandinsert(conn, lower_bound, sno, upper_bound, ratingstablename, dropifexists=True):
     """
     Creates a new partition table and calls INSERT method of DAO to insert the data
     :param conn: open connection to DB
@@ -224,12 +226,12 @@ def createrangepartitionandinsert(conn, lower_bound, sno, upper_bound, dropifexi
     """
     partition_tablename = '{0}{1}'.format(RANGE_PARTITION_TABLE_PREFIX, sno)
     RatingsDAO.create(conn, partition_tablename, dropifexists)
-    RatingsDAO.insertwithselect(lower_bound, upper_bound, partition_tablename, conn)
+    RatingsDAO.insertwithselect(lower_bound, upper_bound, partition_tablename, conn, ratingstablename)
     if Globals.DEBUG: Globals.printinfo(
         'Partition {2}: saved ratings => ({0}, {1}]'.format(lower_bound, upper_bound, sno))
 
 
-def createrobinpartitionandinsert(conn, sno, ids, dropifexists=True):
+def createrobinpartitionandinsert(conn, sno, ids, ratingstablename, dropifexists=True):
     """
     Creates a new partition table and calls INSERT method of DAO to insert the data
     :param conn: open connection to DB
@@ -240,7 +242,7 @@ def createrobinpartitionandinsert(conn, sno, ids, dropifexists=True):
     """
     partition_tablename = '{0}{1}'.format(RROBIN_PARTITION_TABLE_PREFIX, sno)
     RatingsDAO.create(conn, partition_tablename, dropifexists)
-    RatingsDAO.insertids(conn, ids, partition_tablename)
+    RatingsDAO.insertids(conn, ids, partition_tablename, ratingstablename)
     if Globals.DEBUG: Globals.printinfo('Partition {0}: saved {1} ratings => {2}...'.format(sno, len(ids), ids[0:6]))
 
 
@@ -267,13 +269,12 @@ def fetchrating():
 
 def loadratingshelper(conn):
     path = raw_input('Enter data file location: ')
-    loadratings(os.path.abspath(path), conn)
-    # loadratings('test_data.dat', conn)
+    loadratings(RatingsDAO.TABLENAME, os.path.abspath(path), conn)
 
 
 def rangepartitionhelper(conn):
     cpartitions = int(raw_input('How many partitions? '))
-    rangepartition(cpartitions, conn)
+    rangepartition(RatingsDAO.TABLENAME, cpartitions, conn)
 
 
 def roundrobinpartitionhelper(conn):
@@ -283,12 +284,12 @@ def roundrobinpartitionhelper(conn):
 
 def rrobininserthelper(conn):
     newrating = fetchrating()
-    rrobininsert(conn, newrating['userid'], newrating['movieid'], newrating['rating'])
+    roundrobininsert(RatingsDAO.TABLENAME, newrating['userid'], newrating['movieid'], newrating['rating'], conn)
 
 
 def rangeinserthelper(conn):
     newrating = fetchrating()
-    rangeinsert(conn, newrating['userid'], newrating['movieid'], newrating['rating'])
+    rangeinsert(RatingsDAO.TABLENAME, newrating['userid'], newrating['movieid'], newrating['rating'], conn)
 
 
 def handleexit(*_):
@@ -318,15 +319,15 @@ if __name__ == '__main__':
             7: deletepartitionsandexit
         }
 
-        with getopenconnection(dbname=DATABASE_NAME) as conn:
-            conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
-            MetaDataDAO.create(conn)
+        with getopenconnection(dbname=DATABASE_NAME) as dbconnection:
+            dbconnection.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+            MetaDataDAO.create(dbconnection)
 
             while True:
                 choice = raw_input(
                     "\nEnter your choice (number):\n  1) Load Ratings\n  2) Range Partition\n  3) Round Robin Partition\n  4) Range Insert\n  5) Round Robin Insert\n  6) Exit\n  7) Delete Partitions and Exit\t: ")
 
-                options[int(choice)](conn)
+                options[int(choice)](dbconnection)
 
     except Exception as detail:
         Globals.printerror(detail)
