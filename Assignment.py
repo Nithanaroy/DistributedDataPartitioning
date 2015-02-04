@@ -7,10 +7,11 @@ import math
 import RatingsDAO
 import Globals
 import MetaDataDAO
+import os
 
 
 CHUNK_SIZE = 140  # bytes
-MAX_LINES_COUNT_READ = 4  # Maximum number of lines to read into memory
+MAX_LINES_COUNT_READ = 10000  # Maximum number of lines to read into memory
 DATABASE_NAME = 'dds_assgn1'
 MAX_RATING = 5.0
 RANGE_PARTITION_TABLE_PREFIX = 'range_part'
@@ -267,7 +268,8 @@ def rrobininsert(conn, userid, movieid, rating):
 
 
 def loadratingshelper(conn):
-    loadratings('test_data.dat', conn)
+    path = raw_input('Enter data file location: ')
+    loadratings(os.path.abspath(path), conn)
 
 
 def rangepartitionhelper(conn):
