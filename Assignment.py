@@ -168,6 +168,7 @@ def roundrobininsert(ratingstablename, userid, itemid, rating, openconnection):
     :param rating: 3rd column of ratings table, Rating
     :return:None
     """
+    if not validaterating(rating): return
     n = MetaDataDAO.select(openconnection, Globals.RROBIN_PARTITIONS_KEY)
     if n is None:
         Globals.printwarning("First create the partitions and then try to insert")
@@ -196,6 +197,7 @@ def rangeinsert(ratingstablename, userid, itemid, rating, openconnection):
     :param rating: 3rd column of ratings table, Rating
     :return:None
     """
+    if not validaterating(rating): return
     n = MetaDataDAO.select(openconnection, Globals.RANGE_PARTITIONS_KEY)
     if n is None:
         Globals.printwarning("First create the partitions and then try to insert")
@@ -246,22 +248,28 @@ def createrobinpartitionandinsert(conn, sno, ids, ratingstablename, dropifexists
     if Globals.DEBUG: Globals.printinfo('Partition {0}: saved {1} ratings => {2}...'.format(sno, len(ids), ids[0:6]))
 
 
+def validaterating(rating):
+    # validate rating
+    # 1) Should be a positive value and less than or equal to 5.
+    # 2) Should have increments of 0.5
+    validratings = list(Globals.drange(0, 5.1, 0.5))
+    if rating not in validratings:
+        print(
+            'Rating should be a positive value, less than or equal to 5. It should be one of {0}\n'.format(
+                validratings))
+        return False
+    return True
+
+
 def fetchrating():
     userid = int(raw_input('Enter rating, user id: '))
     movieid = int(raw_input('movie id: '))
     while True:
         rating = float(raw_input('rating: '))
-
-        # validate rating
-        # 1) Should be a positive value and less than or equal to 5.
-        # 2) Should have increments of 0.5
-        validratings = list(Globals.drange(0, 5.1, 0.5))
-        if rating not in validratings:
-            print(
-                'Rating should be a positive value, less than or equal to 5. It should be one of {0}. Try again\n'.format(
-                    validratings))
-        else:
+        if validaterating(rating):
             break
+        else:
+            print('Try again: ')
     return {'userid': userid, 'movieid': movieid, 'rating': rating}
 
 
@@ -279,7 +287,7 @@ def rangepartitionhelper(conn):
 
 def roundrobinpartitionhelper(conn):
     cpartitions = int(raw_input('How many partitions? '))
-    roundrobinpartition(cpartitions, conn)
+    roundrobinpartition(RatingsDAO.TABLENAME, cpartitions, conn)
 
 
 def rrobininserthelper(conn):
