@@ -55,3 +55,13 @@ def select(conn, key):
         keyvalue = cur.fetchone()
         if keyvalue is not None: return keyvalue[0]
         return None
+
+
+def drop(conn):
+    """
+    Drops the table
+    :param conn: open connection to DB
+    :return:None
+    """
+    with conn.cursor() as cur:
+        cur.execute('drop table if exists {0};'.format(TABLENAME))

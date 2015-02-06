@@ -25,8 +25,10 @@ def getnextchunk(filepath):
     :param filepath: relative or abs path of the file to read
     :return:Chunk of lines using yield
     """
-    with open(filepath) as f:
-        linesinfile = os.path.getsize(filepath) / LINE_SIZE
+    abs_filepath = os.path.abspath(filepath)
+    print(abs_filepath)
+    with open(abs_filepath) as f:
+        linesinfile = os.path.getsize(abs_filepath) / LINE_SIZE
         totallinesread = 0.0
         while True:
             lines = list(islice(f, MAX_LINES_COUNT_READ))
@@ -48,7 +50,7 @@ def getopenconnection(user='postgres', password='1234', dbname='postgres'):
     return psycopg2.connect("dbname='" + dbname + "' user='" + user + "' host='localhost' password='" + password + "'")
 
 
-def createdb(dbname):
+def create_db(dbname):
     """
     We create a DB by connecting to the default user and database of Postgres
     The function first checks if an existing database exists for a given name, else creates it.
@@ -129,6 +131,7 @@ def rangepartition(ratingstablename, numberofpartitions, openconnection):
     createrangepartitionandinsert(openconnection, -1, 1, 0, ratingstablename, False)
 
     # save the number of partitions in the meta data table
+    MetaDataDAO.create(openconnection)  # Create if the table doesnt exist
     MetaDataDAO.upsert(openconnection, Globals.RANGE_PARTITIONS_KEY, numberofpartitions)
 
 
@@ -155,6 +158,7 @@ def roundrobinpartition(ratingstablename, numberofpartitions, openconnection):
         createrobinpartitionandinsert(openconnection, i, ratingids, ratingstablename)
 
     # save the number of partitions in the meta data table
+    MetaDataDAO.create(openconnection)  # Create if the table doesnt exist
     MetaDataDAO.upsert(openconnection, Globals.RROBIN_PARTITIONS_KEY, numberofpartitions)
 
 
@@ -212,6 +216,32 @@ def rangeinsert(ratingstablename, userid, itemid, rating, openconnection):
     if Globals.DEBUG: Globals.printinfo(
         'Inserted rating (UserID: {0}, MovieID: {1}, Rating: {2}), to "{3}" table'.format(userid, itemid, rating,
                                                                                           destinationtable))
+
+
+def deletepartitions(ratingstablename, openconnection):
+    """
+    Deletes the partitions and the meta data table. Does NOT drop the Ratings table as per requirement
+    :param ratingstablename: name of the ratings table
+    :param openconnection: open connection with DB
+    :return:None
+    """
+    with openconnection.cursor() as cur:
+        # Delete partitions
+        # TODO: Use RatingsDOA to delete the partitions
+        temp = MetaDataDAO.select(openconnection, Globals.RANGE_PARTITIONS_KEY)
+        rangepartitions = 0 if temp is None else int(temp)
+        temp = MetaDataDAO.select(openconnection, Globals.RROBIN_PARTITIONS_KEY)
+        robinpartitions = 0 if temp is None else int(temp)
+
+        queries = []
+        for i in range(0, robinpartitions):
+            queries.append('DROP TABLE IF EXISTS {0}{1}'.format(RROBIN_PARTITION_TABLE_PREFIX, i))
+        for i in range(1, rangepartitions + 1):
+            queries.append('DROP TABLE IF EXISTS {0}{1}'.format(RANGE_PARTITION_TABLE_PREFIX, i))
+        cur.execute('; '.join(queries))
+        # Delete MetaData table
+        MetaDataDAO.drop(openconnection)
+        if Globals.DEBUG: Globals.printinfo('Deleted partitions and Meta Data table')
 
 
 # helpers
@@ -301,41 +331,99 @@ def rangeinserthelper(conn):
 
 
 def handleexit(*_):
+    # TODO: Add a prompt to confirm the selection
     import sys
 
     sys.exit(0)
 
 
-def deletepartitionsandexit(conn):
+def deleteeverythingandexit(conn):
+    # TODO: Add a prompt to confirm the selection
     with conn.cursor() as cur:
         cur.execute('drop schema public cascade; create schema public;')
     Globals.printinfo('Dropped all tables')
     handleexit()
 
 
+def deletepartitionshelper(conn):
+    # TODO: Add a prompt to confirm the selection
+    deletepartitions(RatingsDAO.TABLENAME, conn)
+
+
+# Middleware
+def before_db_creation_middleware():
+    # Use it if you want to
+    pass
+
+
+def after_db_creation_middleware(databasename):
+    # Use it if you want to
+    pass
+
+
+def before_test_script_starts_middleware(openconnection, databasename):
+    openconnection.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+    MetaDataDAO.create(openconnection)
+
+
+def after_test_script_ends_middleware(openconnection, databasename):
+    # Use it if you want to
+    pass
+
+
 if __name__ == '__main__':
     try:
-        createdb(DATABASE_NAME)
 
-        options = {
-            1: loadratingshelper,
-            2: rangepartitionhelper,
-            3: roundrobinpartitionhelper,
-            4: rangeinserthelper,
-            5: rrobininserthelper,
-            6: handleexit,
-            7: deletepartitionsandexit
-        }
+        # Use this function to do any set up before creating the DB, if any
+        before_db_creation_middleware()
 
-        with getopenconnection(dbname=DATABASE_NAME) as dbconnection:
-            dbconnection.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
-            MetaDataDAO.create(dbconnection)
+        create_db(DATABASE_NAME)
 
-            while True:
-                choice = raw_input(
-                    "\nEnter your choice (number):\n  1) Load Ratings\n  2) Range Partition\n  3) Round Robin Partition\n  4) Range Insert\n  5) Round Robin Insert\n  6) Exit\n  7) Delete Partitions and Exit\t: ")
+        # Use this function to do any set up after creating the DB, if any
+        after_db_creation_middleware(DATABASE_NAME)
 
-                options[int(choice)](dbconnection)
+        with getopenconnection() as con:
+            # Use this function to do any set up before I starting calling your functions to test, if you want to
+            before_test_script_starts_middleware(con, DATABASE_NAME)
+
+            # Here is where I will start calling your functions to test them. For example,
+            loadratings('ratings.dat', con)
+            # ###################################################################################
+            # Anything in this area will not be executed as I will call your functions directly
+            # so please add whatever code you want to add in main, in the middleware functions provided "only"
+            # ###################################################################################
+
+            # Use this function to do any set up after I finish testing, if you want to
+            after_test_script_ends_middleware(con, DATABASE_NAME)
 
     except Exception as detail:
-        Globals.printerror(detail)
+        print "OOPS! This is the error ==> ", detail
+
+
+        # if __name__ == '__main__':
+        # try:
+        # create_db(DATABASE_NAME)
+        #
+        # options = {
+        # 1: loadratingshelper,
+        # 2: rangepartitionhelper,
+        # 3: roundrobinpartitionhelper,
+        # 4: rangeinserthelper,
+        # 5: rrobininserthelper,
+        # 6: handleexit,
+        #             7: deleteeverythingandexit,
+        #             8: deletepartitionshelper
+        #         }
+        #
+        #         with getopenconnection(dbname=DATABASE_NAME) as dbconnection:
+        #             dbconnection.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+        #             MetaDataDAO.create(dbconnection)
+        #
+        #             while True:
+        #                 choice = raw_input(
+        #                     "\nEnter your choice (number):\n  1) Load Ratings\n  2) Range Partition\n  3) Round Robin Partition\n  4) Range Insert\n  5) Round Robin Insert\n  6) Exit\n  7) Delete everything and Exit\n  8) Delete partitions\t: ")
+        #
+        #                 options[int(choice)](dbconnection)
+        #
+        #     except Exception as detail:
+        #         Globals.printerror(detail)

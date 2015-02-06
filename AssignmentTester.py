@@ -299,7 +299,7 @@ def testrangeinsert(ratingstablename, userid, itemid, rating, openconnection, ex
 @LogMe('Deleting all testing tables using your own function')
 def testdelete(openconnection):
     # Not testing this piece!!!
-    MyAssignment.deletepartitionsandexit(openconnection)
+    MyAssignment.deleteeverythingandexit(openconnection)
 
 
 # Middleware
