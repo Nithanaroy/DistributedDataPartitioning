@@ -371,59 +371,59 @@ def after_test_script_ends_middleware(openconnection, databasename):
     pass
 
 
+# if __name__ == '__main__':
+# try:
+#
+#         # Use this function to do any set up before creating the DB, if any
+#         before_db_creation_middleware()
+#
+#         create_db(DATABASE_NAME)
+#
+#         # Use this function to do any set up after creating the DB, if any
+#         after_db_creation_middleware(DATABASE_NAME)
+#
+#         with getopenconnection() as con:
+#             # Use this function to do any set up before I starting calling your functions to test, if you want to
+#             before_test_script_starts_middleware(con, DATABASE_NAME)
+#
+#             # Here is where I will start calling your functions to test them. For example,
+#             loadratings('ratings.dat', con)
+#             # ###################################################################################
+#             # Anything in this area will not be executed as I will call your functions directly
+#             # so please add whatever code you want to add in main, in the middleware functions provided "only"
+#             # ###################################################################################
+#
+#             # Use this function to do any set up after I finish testing, if you want to
+#             after_test_script_ends_middleware(con, DATABASE_NAME)
+#
+#     except Exception as detail:
+#         print "OOPS! This is the error ==> ", detail
+
+
 if __name__ == '__main__':
     try:
-
-        # Use this function to do any set up before creating the DB, if any
-        before_db_creation_middleware()
-
         create_db(DATABASE_NAME)
 
-        # Use this function to do any set up after creating the DB, if any
-        after_db_creation_middleware(DATABASE_NAME)
+        options = {
+            1: loadratingshelper,
+            2: rangepartitionhelper,
+            3: roundrobinpartitionhelper,
+            4: rangeinserthelper,
+            5: rrobininserthelper,
+            6: handleexit,
+            7: deleteeverythingandexit,
+            8: deletepartitionshelper
+        }
 
-        with getopenconnection() as con:
-            # Use this function to do any set up before I starting calling your functions to test, if you want to
-            before_test_script_starts_middleware(con, DATABASE_NAME)
+        with getopenconnection(dbname=DATABASE_NAME) as dbconnection:
+            dbconnection.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+            MetaDataDAO.create(dbconnection)
 
-            # Here is where I will start calling your functions to test them. For example,
-            loadratings('ratings.dat', con)
-            # ###################################################################################
-            # Anything in this area will not be executed as I will call your functions directly
-            # so please add whatever code you want to add in main, in the middleware functions provided "only"
-            # ###################################################################################
+            while True:
+                choice = raw_input(
+                    "\nEnter your choice (number):\n  1) Load Ratings\n  2) Range Partition\n  3) Round Robin Partition\n  4) Range Insert\n  5) Round Robin Insert\n  6) Exit\n  7) Delete everything and Exit\n  8) Delete partitions\t: ")
 
-            # Use this function to do any set up after I finish testing, if you want to
-            after_test_script_ends_middleware(con, DATABASE_NAME)
+                options[int(choice)](dbconnection)
 
     except Exception as detail:
-        print "OOPS! This is the error ==> ", detail
-
-
-        # if __name__ == '__main__':
-        # try:
-        # create_db(DATABASE_NAME)
-        #
-        # options = {
-        # 1: loadratingshelper,
-        # 2: rangepartitionhelper,
-        # 3: roundrobinpartitionhelper,
-        # 4: rangeinserthelper,
-        # 5: rrobininserthelper,
-        # 6: handleexit,
-        #             7: deleteeverythingandexit,
-        #             8: deletepartitionshelper
-        #         }
-        #
-        #         with getopenconnection(dbname=DATABASE_NAME) as dbconnection:
-        #             dbconnection.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
-        #             MetaDataDAO.create(dbconnection)
-        #
-        #             while True:
-        #                 choice = raw_input(
-        #                     "\nEnter your choice (number):\n  1) Load Ratings\n  2) Range Partition\n  3) Round Robin Partition\n  4) Range Insert\n  5) Round Robin Insert\n  6) Exit\n  7) Delete everything and Exit\n  8) Delete partitions\t: ")
-        #
-        #                 options[int(choice)](dbconnection)
-        #
-        #     except Exception as detail:
-        #         Globals.printerror(detail)
+        Globals.printerror(detail)
