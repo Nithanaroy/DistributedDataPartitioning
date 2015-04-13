@@ -96,3 +96,33 @@ def insertids(conn, ids, desttable, ratingstable=TABLENAME):
           WHERE id IN ({2})
         );""".format(desttable, ratingstable, ','.join(str(id) for id in ids)))
         if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)
+
+
+def get_sorted_rows(conn, col, order, ratingstable=TABLENAME):
+    """
+    get a list of rows from 'ratingstable' sorted by 'col'
+    :param conn: open connection to db
+    :param col: column to sort on
+    :param order: 'ASC' or 'DESC' for ascending or descending order
+    :param ratingstable: name of the table to get data from
+    :return: a list of tuples (rows of table)
+    :throws: ValueError if column is not found
+    """
+    with conn.cursor() as cur:
+        cur.execute('SELECT * FROM {0};'.format(ratingstable))
+        if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)
+        ratings = cur.fetchall()
+
+        cur.execute('select column_name from information_schema.columns where table_name=%s;', (ratingstable, ))
+        if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)
+        ratings_cols = [i[0] for i in cur.fetchall()]
+        index = ratings_cols.index(col)
+
+        def sort_key(item):
+            return item[index]
+
+        res = sorted(ratings, key=sort_key, reverse=(order == 'DESC'))
+
+        # if Globals.DEBUG: Globals.printinfo(res)
+
+        return res

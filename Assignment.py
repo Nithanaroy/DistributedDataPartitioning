@@ -3,11 +3,12 @@ __author__ = 'Nitin Pasumarthy'
 import psycopg2
 from itertools import islice
 import math
+import os
+from multiprocessing.pool import ThreadPool
 
 import RatingsDAO
 import Globals
 import MetaDataDAO
-import os
 
 
 MAX_LINES_COUNT_READ = 100000  # Maximum number of lines to read into memory.
@@ -244,6 +245,37 @@ def deletepartitions(ratingstablename, openconnection):
         if Globals.DEBUG: Globals.printinfo('Deleted partitions and Meta Data table')
 
 
+# Assignment 3
+
+def parallel_sort(table, sorting_column_name, output_table, openconnection):
+    number_of_partitions = MetaDataDAO.select(openconnection, Globals.RANGE_PARTITIONS_KEY)
+    if not number_of_partitions:
+        default_partition_count = 5
+        number_of_partitions = default_partition_count
+        Globals.printwarning(
+            'Range partitioning not done on table, {0}\nCreating {1} partitions'.format(table, default_partition_count))
+        rangepartition(table, default_partition_count, openconnection)
+    else:
+        number_of_partitions = int(number_of_partitions)
+
+    async_result = None
+
+    # Create 'number_of_partitions' threads and sort in parallel
+    pool = ThreadPool(processes=(number_of_partitions % 5 + 1))
+    for i in range(1, number_of_partitions + 1):
+        async_result = pool.apply_async(RatingsDAO.get_sorted_rows, (openconnection, sorting_column_name, 'ASC', table))
+
+    ratings = [[str(x) for x in i[1:]] for i in async_result.get()]
+
+    if Globals.DEBUG: Globals.printinfo('Return value from threadpool: {0}'.format(ratings))
+
+    # Save the result to 'output_table'
+    RatingsDAO.create(openconnection, output_table)
+    RatingsDAO.insert(ratings, openconnection, output_table)
+
+
+# Assignment 3 ends
+
 # helpers
 
 def createrangepartitionandinsert(conn, lower_bound, sno, upper_bound, ratingstablename, dropifexists=True):
@@ -275,7 +307,8 @@ def createrobinpartitionandinsert(conn, sno, ids, ratingstablename, dropifexists
     partition_tablename = '{0}{1}'.format(RROBIN_PARTITION_TABLE_PREFIX, sno)
     RatingsDAO.create(conn, partition_tablename, dropifexists)
     RatingsDAO.insertids(conn, ids, partition_tablename, ratingstablename)
-    if Globals.DEBUG: Globals.printinfo('Partition {0}: saved {1} ratings => {2}...'.format(sno, len(ids), ids[0:6]))
+    if Globals.DEBUG: Globals.printinfo(
+        'Partition {0}: saved {1} ratings => {2}...'.format(sno, len(ids), ids[0:6]))
 
 
 def validaterating(rating):
@@ -350,6 +383,11 @@ def deletepartitionshelper(conn):
     deletepartitions(RatingsDAO.TABLENAME, conn)
 
 
+# Assignment 3 helpers
+def parallel_sort_helper(conn):
+    parallel_sort('ratings', 'rating', 'ABC', conn)
+
+
 # Middleware
 def before_db_creation_middleware():
     # Use it if you want to
@@ -374,27 +412,27 @@ def after_test_script_ends_middleware(openconnection, databasename):
 # if __name__ == '__main__':
 # try:
 #
-#         # Use this function to do any set up before creating the DB, if any
-#         before_db_creation_middleware()
+# # Use this function to do any set up before creating the DB, if any
+# before_db_creation_middleware()
 #
-#         create_db(DATABASE_NAME)
+# create_db(DATABASE_NAME)
 #
-#         # Use this function to do any set up after creating the DB, if any
-#         after_db_creation_middleware(DATABASE_NAME)
+# # Use this function to do any set up after creating the DB, if any
+# after_db_creation_middleware(DATABASE_NAME)
 #
-#         with getopenconnection() as con:
-#             # Use this function to do any set up before I starting calling your functions to test, if you want to
-#             before_test_script_starts_middleware(con, DATABASE_NAME)
+# with getopenconnection() as con:
+# # Use this function to do any set up before I starting calling your functions to test, if you want to
+# before_test_script_starts_middleware(con, DATABASE_NAME)
 #
-#             # Here is where I will start calling your functions to test them. For example,
-#             loadratings('ratings.dat', con)
-#             # ###################################################################################
-#             # Anything in this area will not be executed as I will call your functions directly
-#             # so please add whatever code you want to add in main, in the middleware functions provided "only"
-#             # ###################################################################################
+# # Here is where I will start calling your functions to test them. For example,
+# loadratings('ratings.dat', con)
+# # ###################################################################################
+# # Anything in this area will not be executed as I will call your functions directly
+# # so please add whatever code you want to add in main, in the middleware functions provided "only"
+# # ###################################################################################
 #
-#             # Use this function to do any set up after I finish testing, if you want to
-#             after_test_script_ends_middleware(con, DATABASE_NAME)
+# # Use this function to do any set up after I finish testing, if you want to
+# after_test_script_ends_middleware(con, DATABASE_NAME)
 #
 #     except Exception as detail:
 #         print "OOPS! This is the error ==> ", detail
@@ -412,7 +450,8 @@ if __name__ == '__main__':
             5: rrobininserthelper,
             6: handleexit,
             7: deleteeverythingandexit,
-            8: deletepartitionshelper
+            8: deletepartitionshelper,
+            9: parallel_sort_helper
         }
 
         with getopenconnection(dbname=DATABASE_NAME) as dbconnection:
@@ -421,9 +460,10 @@ if __name__ == '__main__':
 
             while True:
                 choice = raw_input(
-                    "\nEnter your choice (number):\n  1) Load Ratings\n  2) Range Partition\n  3) Round Robin Partition\n  4) Range Insert\n  5) Round Robin Insert\n  6) Exit\n  7) Delete everything and Exit\n  8) Delete partitions\t: ")
+                    "\nEnter your choice (number):\n  1) Load Ratings\n  2) Range Partition\n  3) Round Robin Partition\n  4) Range Insert\n  5) Round Robin Insert\n  6) Exit\n  7) Delete everything and Exit\n  8) Delete partitions\n  9) Parallel Sort\t: ")
 
                 options[int(choice)](dbconnection)
 
-    except Exception as detail:
-        Globals.printerror(detail)
+    except ValueError as detail:
+        raise detail
+        # Globals.printerror(detail)
