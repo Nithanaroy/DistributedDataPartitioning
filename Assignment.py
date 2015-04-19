@@ -5,6 +5,7 @@ from itertools import islice
 import math
 import os
 from multiprocessing.pool import ThreadPool
+import thread
 
 import RatingsDAO
 import Globals
@@ -247,52 +248,88 @@ def deletepartitions(ratingstablename, openconnection):
 
 # Assignment 3
 
-def parallel_sort(table, sorting_column_name, output_table, openconnection):
-    number_of_partitions = MetaDataDAO.select(openconnection, Globals.RANGE_PARTITIONS_KEY)
-    if not number_of_partitions:
-        default_partition_count = 5
-        number_of_partitions = default_partition_count
-        Globals.printwarning(
-            'Range partitioning not done on table, {0}\nCreating {1} partitions'.format(table, default_partition_count))
-        rangepartition(table, default_partition_count, openconnection)
-    else:
-        number_of_partitions = int(number_of_partitions)
+def rangepartitiongeneric(tablename, columnname, numberofpartitions, openconnection):
+    """
+    Partitions the ratings table in to the given number of partition using Range based partitioning scheme
+    Partitioned table names will be starting from 1. If the number of partitions are N, the range of Rating values,
+    0 to MAX_RATING, will be split uniformly into N pieces.
+    Eg: N = 5
+    Partition 1: all movies with a rating => [0, 1]
+    Partition 2: all movies with a rating => (1, 2]
+    Partition 3: all movies with a rating => (2, 3]
+    Partition 4: all movies with a rating => (3, 4]
+    Partition 5: all movies with a rating => (4, 5]
+    As shown, movies with zero rating will be placed in the first partition
+    :param numberofpartitions: Number of partitions
+    :param openconnection: open connection to DB
+    :return:None
+    """
+    if numberofpartitions <= 0 or not isinstance(numberofpartitions, int): raise AttributeError(
+        "Number of partitions should be a positive integer")
 
-    async_result = None
+    min_max = RatingsDAO.get_min_max(openconnection, columnname, tablename)
+    inc = (min_max[1] - min_max[0]) / numberofpartitions  # This devision doesnt leave any reminder is the assumption
+    lower_bound = min_max[0]
+    upper_bound = lower_bound + inc
+
+    partition_index = 1
+    while upper_bound <= MAX_RATING:
+        createrangepartitionandinsert(openconnection, lower_bound, partition_index, upper_bound, tablename)
+        lower_bound += inc
+        upper_bound += inc
+        partition_index += 1
+
+    # save the rows with min value of sort column in the first partition
+    createrangepartitionandinsert(openconnection, min_max[0] - 1, 1, min_max[0], tablename, False)
+
+    # save the number of partitions in the meta data table
+    MetaDataDAO.create(openconnection)  # Create if the table doesnt exist
+    MetaDataDAO.upsert(openconnection, Globals.RANGE_PARTITIONS_KEY, numberofpartitions)
+
+
+def parallel_sort(table, sorting_column_name, output_table, openconnection):
+    number_of_partitions = 5
+    Globals.printwarning(
+        'Creating  Range partitions on table, {0}\nCreating {1} partitions'.format(table, number_of_partitions))
+    rangepartitiongeneric(table, sorting_column_name, number_of_partitions, openconnection)
+
+    # output table to save the sorted tuples
+    RatingsDAO.create2(openconnection, output_table)
+
+    tuple_order_indices = [1]  # starting tuple order index for each partition
+    for i in range(1, number_of_partitions):
+        tuple_order_indices.append(
+            tuple_order_indices[i - 1] + RatingsDAO.numberofratings(openconnection,
+                                                                    RANGE_PARTITION_TABLE_PREFIX + str(
+                                                                        i)))
 
     # Create 'number_of_partitions' threads and sort in parallel
     pool = ThreadPool(processes=(number_of_partitions % 5 + 1))
     for i in range(1, number_of_partitions + 1):
-        async_result = pool.apply_async(RatingsDAO.get_sorted_rows, (openconnection, sorting_column_name, 'ASC', table))
-
-    ratings = [[str(x) for x in i[1:]] for i in async_result.get()]
-
-    if Globals.DEBUG: Globals.printinfo('Return value from threadpool: {0}'.format(ratings))
-
-    # Save the result to 'output_table'
-    RatingsDAO.create(openconnection, output_table)
-    RatingsDAO.insert(ratings, openconnection, output_table)
+        pool.apply_async(RatingsDAO.sort_rows_and_save,
+                         (openconnection, sorting_column_name, 'ASC', tuple_order_indices[i - 1],
+                          RANGE_PARTITION_TABLE_PREFIX + str(i), output_table))
 
 
 # Assignment 3 ends
 
 # helpers
 
-def createrangepartitionandinsert(conn, lower_bound, sno, upper_bound, ratingstablename, dropifexists=True):
+def createrangepartitionandinsert(conn, lower_bound, partition_index, upper_bound, ratingstablename, dropifexists=True):
     """
     Creates a new partition table and calls INSERT method of DAO to insert the data
     :param conn: open connection to DB
     :param lower_bound: lower bound on the rating
-    :param sno: table number. As single single table is split into parts
+    :param partition_index: table number. As single single table is split into parts
     :param upper_bound: inclusive upper bound on the rating to insert in the new table
     :param dropifexists: drops the table if exists
     :return:None
     """
-    partition_tablename = '{0}{1}'.format(RANGE_PARTITION_TABLE_PREFIX, sno)
+    partition_tablename = '{0}{1}'.format(RANGE_PARTITION_TABLE_PREFIX, partition_index)
     RatingsDAO.create(conn, partition_tablename, dropifexists)
     RatingsDAO.insertwithselect(lower_bound, upper_bound, partition_tablename, conn, ratingstablename)
     if Globals.DEBUG: Globals.printinfo(
-        'Partition {2}: saved ratings => ({0}, {1}]'.format(lower_bound, upper_bound, sno))
+        'Partition {2}: saved values => ({0}, {1}]'.format(lower_bound, upper_bound, partition_index))
 
 
 def createrobinpartitionandinsert(conn, sno, ids, ratingstablename, dropifexists=True):
@@ -434,8 +471,8 @@ def after_test_script_ends_middleware(openconnection, databasename):
 # # Use this function to do any set up after I finish testing, if you want to
 # after_test_script_ends_middleware(con, DATABASE_NAME)
 #
-#     except Exception as detail:
-#         print "OOPS! This is the error ==> ", detail
+# except Exception as detail:
+# print "OOPS! This is the error ==> ", detail
 
 
 if __name__ == '__main__':

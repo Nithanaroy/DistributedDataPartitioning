@@ -13,4 +13,4 @@ class SortThread(ThreadWithReturnValue):
         self.table = table
 
     def run(self):
-        return RatingsDAO.get_sorted_rows(self.conn, self.col, self.order, self.table)
+        return RatingsDAO.sort_rows_and_save(self.conn, self.col, self.order, self.table)
