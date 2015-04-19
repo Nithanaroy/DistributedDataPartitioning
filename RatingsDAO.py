@@ -100,6 +100,52 @@ def insertids(conn, ids, desttable, ratingstable=TABLENAME):
 
 # Assignment 3
 
+def createfromschema(conn, source, dest, dropifexists=True):
+    """
+    Creates a new table using the schema from source table
+    :param conn: open connection to DB
+    :param source: table to get the schema from
+    :param dest: new table name
+    :param dropifexists: drops the dest table if it already exists if set to True
+    :return: None
+    """
+    with conn.cursor() as cur:
+        if dropifexists: cur.execute('DROP TABLE IF EXISTS {0}'.format(dest))
+        # Clone the table
+        cur.execute("""
+            CREATE TABLE {0} AS
+            TABLE {1};
+        """.format(dest, source))
+        # Delete the records in the new table
+        cur.execute('DELETE FROM {0}'.format(dest))
+        if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)
+
+
+def addcolumn(conn, table, col, type):
+    with conn.cursor() as cur:
+        cur.execute('alter table {0} add column {1} {2};'.format(table, col, type))
+        if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)
+
+
+def insertwithselectgeneric(selectcol, allcols, lowerbound, upperbound, desttable, conn, tablename=TABLENAME):
+    """
+    Inserts data from Master Ratings table to a given table after filtering based on lower and upper bounds
+    :param lowerbound: exclusive lower bound for the SELECT statement
+    :param upperbound: inclusive upper bound for the SELECT statement
+    :param desttable: destination table name to copy data into
+    :param conn: open database connection
+    :param tablename: name of ratings table
+    :return:None
+    """
+    with conn.cursor() as cur:
+        cur.execute("""INSERT INTO {0} ({1}) (
+          SELECT {1}
+          FROM {2}
+          WHERE {3} > {4} AND {3} <= {5}
+        );""".format(desttable, ','.join(allcols), tablename, selectcol, lowerbound, upperbound))
+        if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)
+
+
 def create2(conn, table=TABLENAME, dropifexists=True):
     """
     Creates Ratings table, with given name
@@ -122,7 +168,7 @@ def create2(conn, table=TABLENAME, dropifexists=True):
         if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)
 
 
-def insert2(tuples, conn, table=TABLENAME):
+def insert2(tuples, conn, cols, table=TABLENAME):
     """
     Insert passed tuples into 'table'
     :param tuples: list of tuples to insert
@@ -133,9 +179,17 @@ def insert2(tuples, conn, table=TABLENAME):
     values = []
     with conn.cursor() as cur:
         for tuple in tuples:
-            values.append(cur.mogrify("(%s,%s,%s,%s)", tuple))
-        cur.execute('INSERT INTO {0} (userid, movieid, rating, tupleorder) VALUES '.format(table) + ','.join(values))
+            values.append(cur.mogrify("({0})".format(','.join(['%s' for i in range(0, len(cols))])), tuple))
+        cur.execute('INSERT INTO {0} ({1}) VALUES '.format(table, ','.join(cols)) + ','.join(values))
         if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)
+
+
+def get_column_names(conn, table):
+    with conn.cursor() as cur:
+        cur.execute('select column_name from information_schema.columns where table_name=%s;', (table, ))
+        if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)
+        ratings_cols = [i[0] for i in cur.fetchall()]
+    return ratings_cols
 
 
 def sort_rows_and_save(conn, col, order, tuple_order_start, sourcetable, desttable):
@@ -156,23 +210,22 @@ def sort_rows_and_save(conn, col, order, tuple_order_start, sourcetable, desttab
         ratings = cur.fetchall()
 
         # Get the list of columns in the given table
-        cur.execute('select column_name from information_schema.columns where table_name=%s;', (sourcetable, ))
-        if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)
-        ratings_cols = [i[0] for i in cur.fetchall()]
+        ratings_cols = get_column_names(conn, sourcetable)
         index = ratings_cols.index(col)  # find the index of the sort column in the table
 
         def sort_key(item):
             return item[index]
 
         res = []
-
         for t in sorted(ratings, key=sort_key, reverse=(order == 'DESC')):
-            res.append(t[1:] + (tuple_order_start,))  # ignore the id column for insert
+            res.append(t + (tuple_order_start,))  # TODO: Have to ignore the id column before insert if present
             tuple_order_start += 1
 
         if Globals.DEBUG: Globals.printinfo(res)
 
-        insert2(res, conn, desttable)
+        ratings_cols.append('tupleorder')
+
+        insert2(res, conn, ratings_cols, desttable)
 
 
 def get_min_max(conn, col, tablename):

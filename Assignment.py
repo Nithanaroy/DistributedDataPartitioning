@@ -248,6 +248,25 @@ def deletepartitions(ratingstablename, openconnection):
 
 # Assignment 3
 
+def createrangepartitionandinsertgeneric(conn, col, lower_bound, partition_index, upper_bound, ratingstablename,
+                                         dropifexists=True):
+    """
+    Creates a new partition table and calls INSERT method of DAO to insert the data
+    :param conn: open connection to DB
+    :param lower_bound: lower bound on the rating
+    :param partition_index: table number. As single single table is split into parts
+    :param upper_bound: inclusive upper bound on the rating to insert in the new table
+    :param dropifexists: drops the table if exists
+    :return:None
+    """
+    partition_tablename = '{0}{1}'.format(RANGE_PARTITION_TABLE_PREFIX, partition_index)
+    RatingsDAO.createfromschema(conn, ratingstablename, partition_tablename, dropifexists)
+    RatingsDAO.insertwithselectgeneric(col, RatingsDAO.get_column_names(conn, ratingstablename), lower_bound,
+                                       upper_bound, partition_tablename, conn, ratingstablename)
+    if Globals.DEBUG: Globals.printinfo(
+        'Partition {2}: saved values => ({0}, {1}]'.format(lower_bound, upper_bound, partition_index))
+
+
 def rangepartitiongeneric(tablename, columnname, numberofpartitions, openconnection):
     """
     Partitions the ratings table in to the given number of partition using Range based partitioning scheme
@@ -274,7 +293,8 @@ def rangepartitiongeneric(tablename, columnname, numberofpartitions, openconnect
 
     partition_index = 1
     while upper_bound <= MAX_RATING:
-        createrangepartitionandinsert(openconnection, lower_bound, partition_index, upper_bound, tablename)
+        createrangepartitionandinsertgeneric(openconnection, columnname, lower_bound, partition_index, upper_bound,
+                                             tablename)
         lower_bound += inc
         upper_bound += inc
         partition_index += 1
@@ -289,12 +309,13 @@ def rangepartitiongeneric(tablename, columnname, numberofpartitions, openconnect
 
 def parallel_sort(table, sorting_column_name, output_table, openconnection):
     number_of_partitions = 5
-    Globals.printwarning(
-        'Creating  Range partitions on table, {0}\nCreating {1} partitions'.format(table, number_of_partitions))
+    Globals.printinfo(
+        'Creating Range partitions on table, {0} into {1} partitions'.format(table, number_of_partitions))
     rangepartitiongeneric(table, sorting_column_name, number_of_partitions, openconnection)
 
     # output table to save the sorted tuples
-    RatingsDAO.create2(openconnection, output_table)
+    RatingsDAO.createfromschema(openconnection, table, output_table)
+    RatingsDAO.addcolumn(openconnection, output_table, 'tupleorder', 'NUMERIC')
 
     tuple_order_indices = [1]  # starting tuple order index for each partition
     for i in range(1, number_of_partitions):
@@ -304,7 +325,7 @@ def parallel_sort(table, sorting_column_name, output_table, openconnection):
                                                                         i)))
 
     # Create 'number_of_partitions' threads and sort in parallel
-    pool = ThreadPool(processes=(number_of_partitions % 5 + 1))
+    pool = ThreadPool(processes=number_of_partitions)
     for i in range(1, number_of_partitions + 1):
         pool.apply_async(RatingsDAO.sort_rows_and_save,
                          (openconnection, sorting_column_name, 'ASC', tuple_order_indices[i - 1],
