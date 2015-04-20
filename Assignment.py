@@ -249,7 +249,7 @@ def deletepartitions(ratingstablename, openconnection):
 # Assignment 3
 
 def createrangepartitionandinsertgeneric(conn, col, lower_bound, partition_index, upper_bound, ratingstablename,
-                                         dropifexists=True):
+                                         dropifexists=True, table_prefix=RANGE_PARTITION_TABLE_PREFIX):
     """
     Creates a new partition table and calls INSERT method of DAO to insert the data
     :param conn: open connection to DB
@@ -259,7 +259,7 @@ def createrangepartitionandinsertgeneric(conn, col, lower_bound, partition_index
     :param dropifexists: drops the table if exists
     :return:None
     """
-    partition_tablename = '{0}{1}'.format(RANGE_PARTITION_TABLE_PREFIX, partition_index)
+    partition_tablename = '{0}{1}'.format(table_prefix, partition_index)
     RatingsDAO.createfromschema(conn, ratingstablename, partition_tablename, dropifexists)
     RatingsDAO.insertwithselectgeneric(col, RatingsDAO.get_column_names(conn, ratingstablename), lower_bound,
                                        upper_bound, partition_tablename, conn, ratingstablename)
@@ -267,7 +267,8 @@ def createrangepartitionandinsertgeneric(conn, col, lower_bound, partition_index
         'Partition {2}: saved values => ({0}, {1}]'.format(lower_bound, upper_bound, partition_index))
 
 
-def rangepartitiongeneric(tablename, columnname, numberofpartitions, openconnection):
+def rangepartitiongeneric(tablename, columnname, numberofpartitions, openconnection,
+                          tableprefix=RANGE_PARTITION_TABLE_PREFIX, min_value=None, max_value=None):
     """
     Partitions the ratings table in to the given number of partition using Range based partitioning scheme
     Partitioned table names will be starting from 1. If the number of partitions are N, the range of Rating values,
@@ -286,29 +287,35 @@ def rangepartitiongeneric(tablename, columnname, numberofpartitions, openconnect
     if numberofpartitions <= 0 or not isinstance(numberofpartitions, int): raise AttributeError(
         "Number of partitions should be a positive integer")
 
-    min_max = RatingsDAO.get_min_max(openconnection, columnname, tablename)
-    inc = (min_max[1] - min_max[0]) / numberofpartitions  # This devision doesnt leave any reminder is the assumption
-    lower_bound = min_max[0]
+    if min_value is None or max_value is None:
+        min_max = RatingsDAO.get_min_max(openconnection, columnname, tablename)
+        min_value = min_max[0]
+        max_value = min_max[1]
+
+    inc = (max_value - min_value) / numberofpartitions  # This devision doesnt leave any reminder is the assumption
+    lower_bound = min_value
     upper_bound = lower_bound + inc
 
     partition_index = 1
-    while upper_bound <= MAX_RATING:
+    for i in range(0, numberofpartitions):
         createrangepartitionandinsertgeneric(openconnection, columnname, lower_bound, partition_index, upper_bound,
-                                             tablename)
+                                             tablename, True, tableprefix)
         lower_bound += inc
         upper_bound += inc
         partition_index += 1
 
     # save the rows with min value of sort column in the first partition
-    createrangepartitionandinsert(openconnection, min_max[0] - 1, 1, min_max[0], tablename, False)
+    createrangepartitionandinsert(openconnection, min_value - 1, 1, min_value, tablename, False)
 
     # save the number of partitions in the meta data table
     MetaDataDAO.create(openconnection)  # Create if the table doesnt exist
     MetaDataDAO.upsert(openconnection, Globals.RANGE_PARTITIONS_KEY, numberofpartitions)
 
+    return [min_value, max_value]
+
 
 def parallel_sort(table, sorting_column_name, output_table, openconnection):
-    number_of_partitions = 5
+    number_of_partitions = 5  # also dictates the number of threads
     Globals.printinfo(
         'Creating Range partitions on table, {0} into {1} partitions'.format(table, number_of_partitions))
     rangepartitiongeneric(table, sorting_column_name, number_of_partitions, openconnection)
@@ -330,6 +337,37 @@ def parallel_sort(table, sorting_column_name, output_table, openconnection):
         pool.apply_async(RatingsDAO.sort_rows_and_save,
                          (openconnection, sorting_column_name, 'ASC', tuple_order_indices[i - 1],
                           RANGE_PARTITION_TABLE_PREFIX + str(i), output_table))
+
+    Globals.printinfo('Launched asynchronous threads for sorting. I am done!')
+
+
+def parallel_join(table1, table2, joincol1, joincol2, output_table, openconnection):
+    number_of_partitions = 5  # also dictates the number of threads
+    min_max_table1 = RatingsDAO.get_min_max(openconnection, joincol1, table1)
+    min_max_table2 = RatingsDAO.get_min_max(openconnection, joincol2, table2)
+    min_value = min(min_max_table1[0], min_max_table2[0])  # Pick the min of the minimums
+    max_value = max(min_max_table1[1], min_max_table2[1])  # Pick the max of the maximums
+
+    Globals.printinfo(
+        'Creating Range partitions on table, {0} into {1} partitions'.format(table1, number_of_partitions))
+    rangepartitiongeneric(table1, joincol1, number_of_partitions, openconnection, 'range_tbl1_part', min_value,
+                          max_value)
+
+    Globals.printinfo(
+        'Creating Range partitions on table, {0} into {1} partitions'.format(table2, number_of_partitions))
+    rangepartitiongeneric(table2, joincol2, number_of_partitions, openconnection, 'range_tbl2_part', min_value,
+                          max_value)
+
+    # Drop output table if exists
+    # RatingsDAO.drop_table(openconnection, output_table)
+    RatingsDAO.create_join_table(openconnection, table1, joincol1, table2, joincol2, output_table)
+
+    # Create 'number_of_partitions' threads and sort in parallel
+    for i in range(1, number_of_partitions + 1):
+        thread.start_new_thread(RatingsDAO.join_tables,
+                                (openconnection, table1, joincol1, table2, joincol2, output_table))
+
+    Globals.printinfo('Launched asynchronous threads for join. I am done!')
 
 
 # Assignment 3 ends
@@ -446,6 +484,10 @@ def parallel_sort_helper(conn):
     parallel_sort('ratings', 'rating', 'ABC', conn)
 
 
+def parallel_join_helper(conn):
+    parallel_join('ratings', 'ratings', 'movieid', 'movieid', 'joined_ratings', conn)
+
+
 # Middleware
 def before_db_creation_middleware():
     # Use it if you want to
@@ -509,7 +551,8 @@ if __name__ == '__main__':
             6: handleexit,
             7: deleteeverythingandexit,
             8: deletepartitionshelper,
-            9: parallel_sort_helper
+            9: parallel_sort_helper,
+            10: parallel_join_helper
         }
 
         with getopenconnection(dbname=DATABASE_NAME) as dbconnection:
@@ -518,7 +561,7 @@ if __name__ == '__main__':
 
             while True:
                 choice = raw_input(
-                    "\nEnter your choice (number):\n  1) Load Ratings\n  2) Range Partition\n  3) Round Robin Partition\n  4) Range Insert\n  5) Round Robin Insert\n  6) Exit\n  7) Delete everything and Exit\n  8) Delete partitions\n  9) Parallel Sort\t: ")
+                    "\nEnter your choice (number):\n  1) Load Ratings\n  2) Range Partition\n  3) Round Robin Partition\n  4) Range Insert\n  5) Round Robin Insert\n  6) Exit\n  7) Delete everything and Exit\n  8) Delete partitions\n  9) Parallel Sort\n  10) Parallel Join\t: ")
 
                 options[int(choice)](dbconnection)
 

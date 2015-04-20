@@ -221,7 +221,7 @@ def sort_rows_and_save(conn, col, order, tuple_order_start, sourcetable, desttab
             res.append(t + (tuple_order_start,))  # TODO: Have to ignore the id column before insert if present
             tuple_order_start += 1
 
-        if Globals.DEBUG: Globals.printinfo(res)
+        # if Globals.DEBUG: Globals.printinfo(res)
 
         ratings_cols.append('tupleorder')
 
@@ -233,3 +233,32 @@ def get_min_max(conn, col, tablename):
         cur.execute('SELECT MIN({0}), MAX({2}) FROM {1};'.format(col, tablename, col))
         if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)
         return cur.fetchone()
+
+
+def drop_table(conn, tablename):
+    with conn.cursor() as cur:
+        cur.execute('DROP TABLE IF EXISTS {0}'.format(tablename))
+        if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)
+
+
+def create_join_table(conn, table1, col1, table2, col2, outputtable, dropifexists=True):
+    if dropifexists: drop_table(conn, outputtable)
+    with conn.cursor() as cur:
+        # Check if table exists, if not create it and then insert
+        cols1 = ['t1.' + col + ' AS t1' + col for col in get_column_names(conn, table1)]  # renaming columns of table1
+        cols2 = ['t2.' + col + ' AS t2' + col for col in get_column_names(conn, table2)]  # renaming columns of table1
+        join_clause = "SELECT {4}, {5} FROM {0} t1, {1} t2 WHERE t1.{2} = t2.{3} LIMIT 1".format(table1, table2, col1,
+                                                                                                 col2, ','.join(cols1),
+                                                                                                 ','.join(cols2))
+        cur.execute("CREATE TABLE {0} AS ({1}) WITH NO DATA;".format(outputtable, join_clause))
+        if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)
+
+
+def join_tables(conn, table1, col1, table2, col2, outputtable):
+    with conn.cursor() as cur:
+        # Check if table exists, if not create it and then insert
+        cols = get_column_names(conn, outputtable)
+        join_clause = "SELECT * FROM {0} t1, {1} t2 WHERE t1.{2} = t2.{3}".format(table1, table2, col1, col2)
+        query = "INSERT into {0} ({1}) {2};".format(outputtable, ','.join(cols), join_clause)
+        cur.execute(query)
+        if Globals.DEBUG and Globals.DATABASE_QUERIES_DEBUG: Globals.printquery(cur.query)
